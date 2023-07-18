@@ -1,6 +1,6 @@
 <div align="center">
 
-<img width="150px" src="https://raw.githubusercontent.com/cohenerickson/Velocity/main/public/icons/512.png">
+<img width="150px" src="https://raw.githubusercontent.com/PsychyBruh/Velocity/main/public/icons/512.png">
 
 # Velocity
 
@@ -65,7 +65,7 @@ Velocity currently does not officially support any quick deployment platforms. A
 - [NodeJS version >=18](https://nodejs.org/)
 
 ```bash
-git clone https://github.com/cohenerickson/Velocity.git
+git clone https://github.com/PsychyBruh/Velocity.git
 cd Velocity
 npm i
 npm run build

@@ -316,7 +316,7 @@ export default function Utility(): JSX.Element {
         <a
           target="_blank"
           aria-label="View source code on GitHub."
-          href="https://github.com/cohenerickson/Velocity"
+          href="https://github.com/PsychyBruh/Velocity"
           class="cursor-default"
         >
           <div class="toolbarbutton-1 flex h-8 w-8 items-center justify-center rounded">
