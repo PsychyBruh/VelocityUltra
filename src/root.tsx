@@ -1,8 +1,9 @@
 // @refresh reload
-import { BookmarkDB } from "./addon/API/bookmarks";
+import { BookmarkDB } from "./addon/api/bookmarks";
 import "./browser.css";
 import SEO from "./components/SEO";
 import { globalBindingUtil } from "./manager/addonWorkerManager";
+import { createScriptLoader } from "@solid-primitives/script-loader";
 import { openDB } from "idb";
 import { Suspense, onMount } from "solid-js";
 import type { JSX } from "solid-js";
@@ -20,12 +21,29 @@ import { defaultTheme, updateCssVariables } from "~/manager/themeManager";
 import { preferences } from "~/util/";
 
 export default function Root(): JSX.Element {
+  function headRef(head: HTMLHeadElement) {
+    const fontawesome = document.createElement("script");
+    fontawesome.src = "/pro.fontawesome.js";
+    head.appendChild(fontawesome);
+
+    const bundle = document.createElement("script");
+    bundle.charset = "UTF-8";
+    bundle.src = "/uv/uv.bundle.js";
+
+    bundle.onload = () => {
+      const config = document.createElement("script");
+      config.src = "/uv/uv.config.js";
+      head.appendChild(config);
+
+      config.onload = () => {
+        import("~/util/registerSW");
+      };
+    };
+
+    head.appendChild(bundle);
+  }
+
   onMount(async () => {
-    ["/uv/uv.config.js", "/uv/uv.bundle.js"].forEach((_) => {
-      const s = document.createElement("script");
-      s.src = _;
-      document.head.appendChild(s);
-    });
     await updateTheme(localStorage.getItem("theme")!);
 
     window.addEventListener("storage", async (event: StorageEvent) => {
@@ -58,10 +76,7 @@ export default function Root(): JSX.Element {
 
   return (
     <Html lang="en">
-      <Head>
-        <script src="/pro.fontawesome.js" defer></script>
-        <script src="/uv/uv.bundle.js"></script>
-        <script src="/uv/uv.config.js"></script>
+      <Head ref={headRef}>
         <SEO />
       </Head>
       <Body class="h-screen">

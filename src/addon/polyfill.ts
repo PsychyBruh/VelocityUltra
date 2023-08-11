@@ -1,21 +1,17 @@
-import * as alarms from "./API/alarms";
-import * as bookmarks from "./API/bookmarks";
-import * as captivePortal from "./API/captivePortal";
-import * as dns from "./API/dns";
-import * as dom from "./API/dom";
-import * as i18n from "./API/i18n";
-import * as idle from "./API/idle";
-import BareClient from "@tomphttp/bare-client";
+import * as alarms from "./api/alarms";
+import * as bookmarks from "./api/bookmarks";
+import * as captivePortal from "./api/captivePortal";
+import * as dns from "./api/dns";
+import * as dom from "./api/dom";
+import * as i18n from "./api/i18n";
+import * as idle from "./api/idle";
+import runtime from "./api/runtime";
+import * as storage from "./api/storage";
 import Manifest from "webextension-manifest";
 
 declare global {
-  var _$permissions: string[] | undefined;
-  var _$extensionId: string | undefined;
-  var _$bareClient: BareClient;
-  var getBrowserObject: (manifest: Manifest) => any;
+  var getBrowserObject: (manifest: Manifest["permissions"], id: string) => any;
 }
-
-self._$bareClient = new BareClient("https://uv.radon.games/");
 
 function deepFreeze(object: any): any {
   const propNames = Reflect.ownKeys(object);
@@ -31,45 +27,55 @@ function deepFreeze(object: any): any {
   return Object.freeze(object);
 }
 
-self.getBrowserObject = (manifest: Manifest): any => {
-  self._$permissions = manifest.permissions;
-
+self.getBrowserObject = (
+  permissions: Manifest["permissions"],
+  id: string
+): any => {
   const browser = {
     dom,
-    i18n
+    i18n,
+    runtime
   };
 
-  if (manifest.permissions?.includes("alarms")) {
+  runtime.id = id;
+
+  if (permissions?.includes("alarms")) {
     Object.assign(browser, {
       alarms
     });
   }
 
-  if (manifest.permissions?.includes("bookmarks")) {
+  if (permissions?.includes("bookmarks")) {
     Object.assign(browser, {
       bookmarks
     });
   }
 
-  if (manifest.permissions?.includes("captivePortal")) {
+  if (permissions?.includes("captivePortal")) {
     Object.assign(browser, {
       captivePortal
     });
   }
 
-  if (manifest.permissions?.includes("dns")) {
+  if (permissions?.includes("dns")) {
     Object.assign(browser, {
       dns
     });
   }
 
-  if (manifest.permissions?.includes("idle")) {
+  if (permissions?.includes("idle")) {
     Object.assign(browser, {
       idle
     });
   }
 
-  deepFreeze(browser);
+  if (permissions?.includes("storage")) {
+    Object.assign(browser, {
+      storage
+    });
+  }
 
-  return browser;
+  return deepFreeze(browser);
 };
+
+export default getBrowserObject;
