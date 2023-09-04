@@ -1,3 +1,4 @@
+import * as bookmarks from "../addon/api/bookmarks";
 import AddonDownloader from "./AddonDownloader";
 import ExtensionReader from "./AddonReader";
 import ContextItem from "./ContextItem";
@@ -8,15 +9,15 @@ import Protocol from "./Protocol";
 import RuntimeModifier from "./RuntimeModifier";
 import Tab from "./Tab";
 import { bindIFrameMousemove } from "~/components/ContextMenu";
-import { bookmarks, protocols, tabs, keybinds } from "~/data/appState";
+import { protocols, tabs, keybinds } from "~/data/appState";
 import { getActiveTab } from "~/util";
+import { fs, sh } from "~/util/fs";
 
 const velocity = {
   Tab,
   getTabs: tabs,
   Protocol,
   getProtocols: protocols,
-  getBookmarks: bookmarks,
   ContextItem,
   Keybind,
   getKeybinds: keybinds,
@@ -34,7 +35,10 @@ const velocity = {
   AddonDownloader,
   RuntimeModifier,
   Popup,
-  getActiveTab
+  getActiveTab,
+  fs,
+  sh,
+  bookmarks
 };
 
 declare global {

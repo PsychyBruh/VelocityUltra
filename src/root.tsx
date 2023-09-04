@@ -1,10 +1,9 @@
 // @refresh reload
-import { BookmarkDB } from "./addon/api/bookmarks";
+import { BookmarkTreeNode, getChildren } from "./addon/api/bookmarks";
 import "./browser.css";
 import SEO from "./components/SEO";
 import { globalBindingUtil } from "./manager/addonWorkerManager";
-import { createScriptLoader } from "@solid-primitives/script-loader";
-import { openDB } from "idb";
+import { fs, sh } from "./util/fs";
 import { Suspense, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 import {
@@ -50,18 +49,10 @@ export default function Root(): JSX.Element {
       if (event.key === "theme") await updateTheme(event.newValue!);
     });
 
-    const db = await openDB<BookmarkDB>("bookmarks", 1, {
-      upgrade(db) {
-        db.createObjectStore("bookmarks", {
-          keyPath: "id"
-        });
-      }
-    });
-
-    setBookmarks(await db.getAll("bookmarks"));
+    setBookmarks(await getChildren("root________"));
 
     globalBindingUtil.on("bookmarks.reload", async () => {
-      setBookmarks(await db.getAll("bookmarks"));
+      setBookmarks(await getChildren("root________"));
     });
 
     setBookmarksShown((preferences()["bookmarks.shown"] as boolean) ?? true);

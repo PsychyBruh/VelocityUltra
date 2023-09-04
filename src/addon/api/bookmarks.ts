@@ -1,24 +1,40 @@
 import EventManager from "../types/EventManager";
+import ExtensionError from "../util/ExtensionError";
 import bindingUtil from "../util/bindingUtil";
 import callbackWrapper from "../util/callbackWrapper";
-import { openDB, DBSchema } from "idb";
 import { v4 } from "uuid";
+import { fs, sh } from "~/util/fs";
 
-export interface BookmarkDB extends DBSchema {
-  bookmarks: {
-    key: string;
-    value: BookmarkTreeNode;
-  };
+const ROOT_GUID = "root________";
+
+let bookmarks = new Array<BookmarkTreeNode>();
+sh.mkdirp("/Velocity");
+if (await sh.exists("/Velocity/bookmarks.json")) {
+  bookmarks = JSON.parse(await fs.readFile("/Velocity/bookmarks.json", "utf8"));
 }
 
-export type BookmarkTreeNode = {
-  children?: BookmarkTreeNode[];
+async function write() {
+  await fs.writeFile(
+    "/Velocity/bookmarks.json",
+    JSON.stringify(bookmarks),
+    "utf8"
+  );
+}
+
+function throwIfRootGuid(id: string) {
+  // We don't want to throw when running in non-extension context
+  if (id === ROOT_GUID && !("Velocity" in globalThis)) {
+    throw new ExtensionError("The bookmark root cannot be modified");
+  }
+}
+
+type Node = {
   dateAdded?: number;
   dateGroupModified?: number;
   dateLastUsed?: number;
   id: string;
-  index?: number;
-  parentId?: string;
+  index: number;
+  parentId: string;
   title: string;
   type: BookmarkTreeNodeType;
   unmodifiable?: BookmarkTreeNodeUnmodifiable;
@@ -26,12 +42,26 @@ export type BookmarkTreeNode = {
   icon?: string;
 };
 
+export type BookmarkTreeNode<
+  T extends boolean = false,
+  Y extends boolean = false
+> = T extends true
+  ? Y extends true
+    ? Node & {
+        children: BookmarkTreeNode<true, true>[];
+      }
+    : Node & {
+        children: BookmarkTreeNode<true, false>[];
+      }
+  : Node;
+
 export type CreateDetails = {
   index?: number;
   parentId?: string;
   title?: string;
   type?: BookmarkTreeNodeType;
   url: string;
+  icon?: string;
 };
 
 export type BookmarkTreeNodeType = "bookmark" | "folder" | "separator";
@@ -53,30 +83,35 @@ type BookmarkChanges = {
   url?: string;
 };
 
-const db = await openDB<BookmarkDB>("bookmarks", 1, {
-  upgrade(db) {
-    db.createObjectStore("bookmarks", {
-      keyPath: "id"
-    });
-  }
-});
-
 export const create = callbackWrapper($create);
 
+/** Creates a bookmark or folder under the specified parentId. If url is NULL or missing, it will be a folder. */
 async function $create(bookmark: CreateDetails): Promise<BookmarkTreeNode> {
-  const node: BookmarkTreeNode = {
+  let parent: BookmarkTreeNode<true>;
+  if (bookmark.parentId) {
+    parent = (await $getSubTree(bookmark.parentId))[0];
+  } else {
+    parent = (await $getTree())[0];
+  }
+
+  const node: BookmarkTreeNode<false> = {
     dateAdded: Date.now(),
     dateGroupModified: Date.now(),
     dateLastUsed: bookmark.type !== "folder" ? Date.now() : undefined,
     id: v4(),
-    index: bookmark.index,
-    parentId: bookmark.parentId,
+    index: parent.children!.length,
+    parentId: bookmark.parentId || ROOT_GUID,
     title: bookmark.title || bookmark.url || "New Folder",
     type: bookmark.type ?? "folder",
-    url: bookmark.url
+    url: bookmark.url,
+    icon: bookmark.icon ?? bookmark.url
   };
 
-  await db.add("bookmarks", node);
+  throwIfRootGuid(node.parentId);
+
+  bookmarks.push(node);
+
+  await write();
 
   bindingUtil.emit("bookmarks.reload");
   bindingUtil.emit("bookmarks.create", node.id, node);
@@ -86,16 +121,21 @@ async function $create(bookmark: CreateDetails): Promise<BookmarkTreeNode> {
 
 export const get = callbackWrapper($get);
 
+/** Retrieves the specified BookmarkTreeNode(s). */
 async function $get(
   idOrIdList: string | string[]
 ): Promise<BookmarkTreeNode[]> {
-  const nodes = filterBookmarks(
-    await db.getAll("bookmarks"),
+  const nodes = await filterBookmarks(
+    bookmarks,
     Array.isArray(idOrIdList) ? idOrIdList : [idOrIdList]
   );
 
+  if (idOrIdList === ROOT_GUID || idOrIdList.includes(ROOT_GUID)) {
+    nodes.push((await $getTree())[0]);
+  }
+
   if (!nodes.length) {
-    throw new Error("Bookmark not found");
+    throw new ExtensionError("Bookmark not found");
   }
 
   return nodes;
@@ -103,13 +143,13 @@ async function $get(
 
 export const getChildren = callbackWrapper($getChildren);
 
+/** Retrieves the children of the specified BookmarkTreeNode id. */
 async function $getChildren(id: string): Promise<BookmarkTreeNode[]> {
-  const nodes = await db.getAll("bookmarks");
-  const children = getChildrenOf(nodes, id);
-  const [node] = filterBookmarks(nodes, [id]);
+  const children = getChildrenOf(bookmarks, id);
+  let [node] = await filterBookmarks(bookmarks, [id]);
 
   if (!node) {
-    throw new Error("Bookmark not found");
+    throw new ExtensionError("Bookmark not found");
   }
 
   return children;
@@ -117,74 +157,70 @@ async function $getChildren(id: string): Promise<BookmarkTreeNode[]> {
 
 export const getRecent = callbackWrapper($getRecent);
 
+/** Retrieves the recently added bookmarks. */
 async function $getRecent(numberOfItems: number): Promise<BookmarkTreeNode[]> {
   if (numberOfItems === undefined) {
-    throw new Error("numberOfItems argument is required");
+    throw new ExtensionError("numberOfItems argument is required");
   }
 
   if (typeof numberOfItems !== "number" || numberOfItems % 1 !== 0) {
-    throw new Error("numberOfItems argument must be an integer");
+    throw new ExtensionError("numberOfItems argument must be an integer");
   }
 
   if (numberOfItems <= 0) {
-    throw new Error("numberOfItems argument must be greater than zero");
+    throw new ExtensionError(
+      "numberOfItems argument must be greater than zero"
+    );
   }
 
-  const nodes = await db.getAll("bookmarks");
-
-  return nodes
+  return bookmarks
     .sort((a, b) => (b.dateAdded ?? 0) - (a.dateAdded ?? 0))
     .slice(0, numberOfItems);
 }
 
 export const getSubTree = callbackWrapper($getSubTree);
 
-async function $getSubTree(id: string): Promise<BookmarkTreeNode[]> {
-  const nodes = await db.getAll("bookmarks");
-  const [node] = filterBookmarks(nodes, [id]);
+/** Retrieves part of the Bookmarks hierarchy, starting at the specified node. */
+async function $getSubTree(
+  id: string
+): Promise<BookmarkTreeNode<true, true>[]> {
+  const [node] = await filterBookmarks(bookmarks, [id]);
 
   if (!node) {
-    throw new Error("Bookmark not found");
+    throw new ExtensionError("Bookmark not found");
   }
 
-  const children = getChildrenOf(nodes, node.id);
+  const children = getChildrenOf(bookmarks, node.id);
 
   for (let i = 0; i < children.length; i++) {
-    children[i] = getFullNode(nodes, children[i]);
+    children[i] = await getFullNode(bookmarks, children[i]);
   }
 
   return [
     Object.assign({}, node, {
       children
-    })
+    }) as BookmarkTreeNode<true, true>
   ];
 }
 
 export const getTree = callbackWrapper($getTree);
 
-async function $getTree(): Promise<BookmarkTreeNode[]> {
-  const nodes = await db.getAll("bookmarks");
-
-  const children: BookmarkTreeNode[] = [];
-
-  for (let i = 0; i < nodes.length; i++) {
-    if (!nodes[i].parentId) {
-      children.push(getFullNode(nodes, nodes[i]));
-    }
-  }
-
+/** Retrieves the entire Bookmarks hierarchy. */
+async function $getTree(): Promise<BookmarkTreeNode<true>[]> {
   return [
-    {
-      children,
+    await getFullNode(bookmarks, {
       title: "Bookmarks Bar",
       type: "folder",
-      id: "0"
-    }
+      id: ROOT_GUID,
+      index: 0,
+      parentId: ROOT_GUID
+    })
   ];
 }
 
 export const move = callbackWrapper($move);
 
+/** Moves the specified BookmarkTreeNode to the provided location. */
 async function $move(
   id: string,
   destination: BookmarkLocation
@@ -192,103 +228,86 @@ async function $move(
   const [node] = await $get(id);
   const oldParentId = node.parentId;
   const oldIndex = node.index;
+  const events = [];
 
-  if (node.unmodifiable === "managed") {
-    throw new Error("Bookmark is managed");
-  }
+  throwIfRootGuid(node.parentId);
 
-  if (destination.parentId) {
-    const [parent] = await $get(destination.parentId);
-    parent.dateGroupModified = Date.now();
-    await db.put("bookmarks", parent);
+  if (destination.parentId !== undefined) {
+    throwIfRootGuid(destination.parentId);
 
-    if (node.parentId) {
-      const [oldParent] = await $get(node.parentId);
-      oldParent.dateGroupModified = Date.now();
-      await db.put("bookmarks", oldParent);
-
-      if (node.parentId !== destination.parentId) {
-        let children = await $getSubTree(node.parentId);
-        children = children.sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-
-        const currentIndex = children.findIndex((x) => x.id === node.id);
-        children.splice(currentIndex, 1);
-
-        for (let i = 0; i < children.length; i++) {
-          let child = children[i];
-          const oldParentId = child.parentId;
-          const oldIndex = child.index;
-
-          child.index = i;
-
-          await db.put("bookmarks", child);
-
-          if (oldIndex !== child.index || oldParentId !== child.parentId) {
-            bindingUtil.emit("bookmarks.onMoved", {
-              parentId: child.parentId,
-              oldParentId,
-              index: child.index,
-              oldIndex
-            });
-          }
-        }
-
-        bindingUtil.emit("bookmarks.onChildrenReordered", oldParentId, {
-          childIds: children.map((x) => x.id)
-        });
-      }
-    }
+    const [parent] = await $getSubTree(destination.parentId);
 
     node.parentId = destination.parentId;
-  }
+    node.index = parent.children.length;
 
-  if (destination.index) {
-    node.index = destination.index;
+    events.push({
+      parentId: node.parentId,
+      oldParentId,
+      index: node.index,
+      oldIndex
+    });
 
-    if (node.parentId) {
-      const [parent] = await $get(node.parentId);
-      parent.dateGroupModified = Date.now();
-      await db.put("bookmarks", parent);
+    const [oldParent] = await $getSubTree(oldParentId);
 
-      let children = await $getSubTree(node.parentId);
-      children = children.sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+    for (const index in oldParent.children) {
+      const [child] = await $get(oldParent.children[index].id);
 
-      const currentIndex = children.findIndex((x) => x.id === node.id);
-      children.splice(currentIndex, 1);
-      children.splice(destination.index, 0, node);
+      const oldParentId = child.parentId;
+      const oldIndex = child.index;
 
-      for (let i = 0; i < children.length; i++) {
-        let child = children[i];
-        const oldParentId = child.parentId;
-        const oldIndex = child.index;
-
-        child.index = i;
-
-        await db.put("bookmarks", child);
-
-        if (oldIndex !== child.index || oldParentId !== child.parentId) {
-          bindingUtil.emit("bookmarks.onMoved", {
-            parentId: child.parentId,
-            oldParentId,
-            index: child.index,
-            oldIndex
-          });
-        }
-      }
-
-      bindingUtil.emit("bookmarks.onChildrenReordered", oldParentId, {
-        childIds: children.map((x) => x.id)
+      events.push({
+        parentId: node.parentId,
+        oldParentId,
+        index: node.index,
+        oldIndex
       });
+
+      child.index = Number(index);
     }
   }
 
-  await db.put("bookmarks", node);
+  if (destination.index !== undefined) {
+    const [parent] = await $getSubTree(destination.parentId || node.parentId);
 
-  bindingUtil.emit("bookmarks.onMoved", {
-    parentId: node.parentId,
-    oldParentId,
-    index: node.index,
-    oldIndex
+    parent.children.splice(
+      parent.children.findIndex((x) => x.id === node.id),
+      1
+    );
+
+    parent.children.splice(
+      destination.index,
+      0,
+      node as BookmarkTreeNode<true>
+    );
+
+    for (const index in parent.children) {
+      const [child] = await $get(parent.children[index].id);
+
+      const oldParentId = child.parentId;
+      const oldIndex = child.index;
+
+      events.push({
+        parentId: node.parentId,
+        oldParentId,
+        index: node.index,
+        oldIndex
+      });
+
+      child.index = Number(index);
+    }
+
+    events.push({
+      parentId: node.parentId,
+      oldParentId,
+      index: node.index,
+      oldIndex
+    });
+  }
+
+  await write();
+
+  events.forEach((event) => {
+    bindingUtil.emit("bookmarks.onMoved", event);
   });
   bindingUtil.emit("bookmarks.reload");
 
@@ -297,18 +316,20 @@ async function $move(
 
 export const remove = callbackWrapper($remove);
 
+/** Removes a bookmark or an empty bookmark folder. */
 async function $remove(id: string): Promise<void> {
   const [node] = await $getSubTree(id);
 
-  if (!node.parentId) {
-    throw new Error("The bookmark root cannot be modified");
+  throwIfRootGuid(node.parentId);
+
+  if (node.children?.length) {
+    throw new ExtensionError("Item is a non-empty folder");
   }
 
-  if (node.children) {
-    throw new Error("Item is a non-empty folder");
-  }
+  const index = bookmarks.findIndex((x) => x.id === id);
+  bookmarks.splice(index, 1);
 
-  await db.delete("bookmarks", id);
+  await write();
 
   bindingUtil.emit("bookmarks.onRemoved", node.id, {
     index: node.index,
@@ -323,9 +344,7 @@ export const removeTree = callbackWrapper($removeTree);
 async function $removeTree(id: string): Promise<void> {
   const [node] = await $getSubTree(id);
 
-  if (!node.parentId) {
-    throw new Error("The bookmark root cannot be modified");
-  }
+  throwIfRootGuid(node.parentId);
 
   if (node.children) {
     for (let i = 0; i < node.children.length; i++) {
@@ -333,7 +352,10 @@ async function $removeTree(id: string): Promise<void> {
     }
   }
 
-  await db.delete("bookmarks", id);
+  const index = bookmarks.findIndex((x) => x.id === id);
+  bookmarks.splice(index, 1);
+
+  await write();
 
   bindingUtil.emit("bookmarks.onRemoved", node.id, {
     index: node.index,
@@ -372,7 +394,7 @@ async function $search(
     throw new Error("A query option must be specified");
   }
 
-  let nodes = await db.getAll("bookmarks");
+  let nodes = Array.from(bookmarks);
 
   if (query.title) {
     nodes = nodes.filter(
@@ -423,14 +445,18 @@ async function $update(
     node.url = changes.url;
   }
 
-  await db.put("bookmarks", node);
+  Object.assign(bookmarks.find((x) => x.id === id)!, node);
+
+  await write();
 
   bindingUtil.emit("bookmarks.reload");
 
   return node;
 }
 
+/** @deprecated */
 export const MAX_SUSTAINED_WRITE_OPERATIONS_PER_MINUTE = 1000000;
+/** @deprecated */
 export const MAX_WRITE_OPERATIONS_PER_HOUR = 1000000;
 
 export const onCreated = new EventManager("bookmarks.onCreated");
@@ -443,47 +469,49 @@ export const onChildrenReordered = new EventManager(
 export const onImportBegan = new EventManager("bookmarks.onImportBegan");
 export const onImportEnded = new EventManager("bookmarks.onImportEnded");
 
-function filterBookmarks(
+async function filterBookmarks(
   bookmarks: BookmarkTreeNode[],
   ids: string[]
-): BookmarkTreeNode[] {
+): Promise<BookmarkTreeNode[]> {
   const returnBookmarks: BookmarkTreeNode[] = [];
 
-  bookmarks.forEach((bookmark: BookmarkTreeNode) => {
-    if (ids.includes(bookmark.id)) {
-      returnBookmarks.push(bookmark);
+  for (const id of ids) {
+    if (id === ROOT_GUID) {
+      return await $getTree();
     }
-  });
 
-  return returnBookmarks;
+    returnBookmarks.push(bookmarks.find((x) => x.id === id)!);
+  }
+
+  return returnBookmarks.filter((x) => !!x);
 }
 
 function getChildrenOf(
   nodes: BookmarkTreeNode[],
   id: string
 ): BookmarkTreeNode[] {
-  const children: BookmarkTreeNode[] = [];
+  let children: BookmarkTreeNode[] = [];
 
-  nodes.forEach((node) => {
+  for (const node of nodes) {
     if (node.parentId === id) {
       children.push(node);
     }
-  });
+  }
 
-  return children;
+  return children.sort((a, b) => (a.index > b.index ? 1 : -1));
 }
 
-function getFullNode(
+async function getFullNode(
   nodes: BookmarkTreeNode[],
   node: BookmarkTreeNode
-): BookmarkTreeNode {
-  const children = getChildrenOf(nodes, node.id);
+): Promise<BookmarkTreeNode<true, true>> {
+  let children = getChildrenOf(nodes, node.id);
 
   for (let i = 0; i < children.length; i++) {
-    children[i] = getFullNode(nodes, children[i]);
+    children[i] = await getFullNode(nodes, children[i]);
   }
 
   return Object.assign({}, node, {
-    children
-  });
+    children: children.sort((a, b) => (a.index > b.index ? 1 : -1))
+  }) as BookmarkTreeNode<true, true>;
 }

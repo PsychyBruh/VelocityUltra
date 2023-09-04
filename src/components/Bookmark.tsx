@@ -3,10 +3,7 @@ import { createSignal } from "solid-js";
 import type { JSX } from "solid-js";
 import { BookmarkTreeNode } from "~/addon/api/bookmarks";
 import ContextItem from "~/api/ContextItem";
-import Tab from "~/api/Tab";
-import { remove, run } from "~/manager/bookmarkManager";
-import { open } from "~/manager/clickManager";
-import { getActiveTab } from "~/util";
+import { edit, removeNode, run } from "~/manager/bookmarkManager";
 
 interface BookmarkProps {
   sortable: any;
@@ -38,9 +35,15 @@ export default function Bookmark(props: BookmarkProps): JSX.Element {
             separator: true
           }),
           new ContextItem({
-            text: "Delete",
+            text: "Edit Bookmark...",
             onClick: () => {
-              remove(bookmark);
+              edit(bookmark);
+            }
+          }),
+          new ContextItem({
+            text: "Delete Bookmark...",
+            onClick: () => {
+              removeNode(bookmark);
             }
           }),
           new ContextItem({
@@ -51,10 +54,12 @@ export default function Bookmark(props: BookmarkProps): JSX.Element {
     >
       <div class="h-[15px] w-[15px]">
         <Favicon
-          src={createSignal<string>(bookmark.icon || "about:newTab")[0]}
+          src={createSignal<string>(bookmark.icon || "/icons/earth.svg")[0]}
         ></Favicon>
       </div>
-      {bookmark.title}
+      {bookmark.title.length > 20
+        ? bookmark.title.substring(0, 18) + "..."
+        : bookmark.title}
     </div>
   );
 }
